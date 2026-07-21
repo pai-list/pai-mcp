@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pai-mcp-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PAIMCP", "class_name": "PAIMCP" }
+    ]
+  },
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    { "binding": "DB_INDUCT", "database_name": "pai-induct" },
+    { "binding": "DB_SKILLS", "database_name": "pai-skills" },
+    { "binding": "DB_GHOST", "database_name": "pai-ghost" }
+  ],
+  "kv_namespaces": [
+    { "binding": "CONFIG" }
+  ],
+  "observability": { "enabled": true },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PAIMCP"] }
+  ],
+  "vars": {
+    "GHOST_BUILD_API_URL": "https://api.ghost.build",
+    "TIGERDATA_API_URL": "https://api.tigerdata.com"
+  }
+}
