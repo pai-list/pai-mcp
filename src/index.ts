@@ -174,6 +174,31 @@ export class PAIMCP extends McpAgent<Env> {
     // 📊 TigerData — pai_td_* (Layer 8)
     // ════════════════════════════════════
 
+    
+    this.server.tool("pai_td_openllm_infer", "Run heavy OpenLLM reasoning via TigerData ($1k Credit Pool)", {
+      prompt: z.string().describe("User prompt or code task"),
+      model: z.string().default("qwen2.5-72b-instruct").describe("Model name (qwen2.5-72b-instruct / llama-3.1-70b-instruct)"),
+      system: z.string().optional().describe("Optional system prompt"),
+    }, async ({ prompt, model, system }) => {
+      const apiKey = (this.env as any).TIGERDATA_API_KEY;
+      const apiUrl = (this.env as any).TIGERDATA_API_URL || "https://console.cloud.tigerdata.com/projects/fxt4i3w3h2/cli-mcp/mcp";
+      if (!apiKey) return { content: [{ type: "text", text: "Error: TIGERDATA_API_KEY not set" }] };
+      const resp = await fetch(apiUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [
+            ...(system ? [{ role: "system", content: system }] : []),
+            { role: "user", content: prompt }
+          ]
+        }),
+      });
+      const data = await resp.json() as any;
+      const responseText = data.choices?.[0]?.message?.content || JSON.stringify(data);
+      return { content: [{ type: "text", text: responseText }] };
+    });
+
     this.server.tool("pai_td_query", "Query TigerData time-series analytics", {
       sql: z.string().describe("TimescaleDB SQL query"),
     }, async ({ sql }) => {
