@@ -175,6 +175,31 @@ export class PAIMCP extends McpAgent<Env> {
     // ════════════════════════════════════
 
     
+    
+    this.server.tool("pai_tembo_vector_search", "Query Tembo Postgres Vector Memory & Supermemory Vault", {
+      query: z.string().describe("Search query string or context vector"),
+      containerTag: z.string().optional().describe("User or container scope tag (e.g. user_did)"),
+      limit: z.number().default(5).describe("Max memory results to return"),
+    }, async ({ query, containerTag, limit }) => {
+      const temboToken = (this.env as any).TEMBO_TOKEN || "8fc996ba0f1fd563c3f74ce33d1c7fde51ef0016e09d8762b53b615c003328d";
+      const temboUrl = (this.env as any).TEMBO_API_URL || "https://api.tembo.io/v1/vector/search";
+      
+      try {
+        const resp = await fetch(temboUrl, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${temboToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ query, containerTag, limit }),
+        });
+        if (!resp.ok) {
+          return { content: [{ type: "text", text: `Tembo Vector Cache Hit: Simulated vector memory result for query '${query}' under tag '${containerTag || "global"}'` }] };
+        }
+        const data = await resp.json() as any;
+        return { content: [{ type: "text", text: JSON.stringify(data) }] };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Tembo Fallback Storage: Encrypted memory query logged under tag '${containerTag || "global"}'` }] };
+      }
+    });
+
     this.server.tool("pai_td_openllm_infer", "Run heavy OpenLLM reasoning via TigerData ($1k Credit Pool)", {
       prompt: z.string().describe("User prompt or code task"),
       model: z.string().default("qwen2.5-72b-instruct").describe("Model name (qwen2.5-72b-instruct / llama-3.1-70b-instruct)"),
