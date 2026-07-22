@@ -10,7 +10,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-00FF41?labelColor=0a0a0f)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-00FF41?labelColor=0a0a0f)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Model_Context_Protocol-6C5CE7?labelColor=0a0a0f)](https://modelcontextprotocol.io/)
 
 ---
