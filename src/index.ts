@@ -1,348 +1,393 @@
-import { McpAgent } from "agents/mcp";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+#!/usr/bin/env node
 
-// Global Env type for Workers bindings
-interface Env {
-  AI: any;
-  CONFIG: any;
-  DB_INDUCT: any;
-  DB_SKILLS: any;
-  DB_GHOST: any;
-  CF_ACCOUNT_ID?: string;
-  CF_API_TOKEN?: string;
-  VERCEL_API_TOKEN?: string;
-  GHOST_BUILD_API_KEY?: string;
-  GHOST_BUILD_API_URL: string;
-  TIGERDATA_API_KEY?: string;
-  TIGERDATA_API_URL: string;
-  PI_SANDBOX?: string;
-  PI_WALLET_ADDRESS?: string;
+/**
+ * @pai/mcp — PAI Universe MCP Server
+ *
+ * Exposes PAI's 7 memory layers, identity verification, and credential
+ * tools via the Model Context Protocol (MCP).
+ *
+ * Tools provided:
+ *   - memory_store     Store a memory (backed by mem7)
+ *   - memory_recall    Recall relevant memories (with decay + context scoring)
+ *   - memory_delete    Delete a memory
+ *   - identity_verify  Verify a Pi access token + DID
+ *   - credential_issue Issue a pai:// Verifiable Credential
+ *   - credential_verify Verify a pai:// credential
+ *
+ * Usage:
+ *   npx @pai/mcp
+ *   # or add to Claude Code / Hermes MCP config:
+ *   pai-mcp as command
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import Ajv from "ajv";
+
+// ── Configuration ──
+
+const AXIOMID_API = process.env.AXIOMID_API_URL ?? "https://axiomid.app";
+const PI_API_KEY = process.env.PI_API_KEY ?? "";
+const OPENIDENTITY_SCHEMA_URL =
+  "https://raw.githubusercontent.com/pai-list/openidentity.md/main/schema/openidentity.schema.json";
+
+// ── Tool Definitions ──
+
+const TOOLS: Tool[] = [
+  {
+    name: "memory_store",
+    description: "Store a conversation memory for an agent. Backed by mem7 (Rust memory engine with Ebbinghaus decay, dedup, and graph extraction).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The memory content to store" },
+        userId: { type: "string", description: "User/agent identifier" },
+        sessionId: { type: "string", description: "Optional session ID" },
+      },
+      required: ["content", "userId"],
+    },
+  },
+  {
+    name: "memory_recall",
+    description: "Recall relevant memories for a query. Results are scored by mem7's Ebbinghaus decay curve and context-scoring matrix.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        userId: { type: "string", description: "User/agent identifier" },
+        limit: { type: "number", description: "Max results (default 10)" },
+        taskType: { type: "string", description: "Task type for context scoring: troubleshooting, design, factual, planning, general" },
+      },
+      required: ["query", "userId"],
+    },
+  },
+  {
+    name: "memory_delete",
+    description: "Delete a specific memory by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Memory ID to delete" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "identity_verify",
+    description: "Verify a Pi access token and return the authenticated user's DID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        accessToken: { type: "string", description: "Pi access token from Pi Browser" },
+      },
+      required: ["accessToken"],
+    },
+  },
+  {
+    name: "credential_issue",
+    description: "Issue a pai:// Verifiable Credential for a DID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        did: { type: "string", description: "Decentralized Identifier" },
+        credentialType: {
+          type: "string",
+          enum: ["HumanAuthorization", "PiKYC", "Passport"],
+          description: "Type of credential to issue",
+        },
+      },
+      required: ["did", "credentialType"],
+    },
+  },
+  {
+    name: "credential_verify",
+    description: "Verify a pai:// Verifiable Credential.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        credential: {
+          type: "object",
+          description: "Credential object to verify",
+        },
+      },
+      required: ["credential"],
+    },
+  },
+  {
+    name: "openidentity_discover",
+    description:
+      "Fetch and validate an OpenIdentity manifest for an AI agent. Accepts a DID, username, or URL and returns the validated manifest plus schema validation results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        identifier: {
+          type: "string",
+          description:
+            "Agent identifier — DID (did:axiom:...), username, or full manifest URL",
+        },
+      },
+      required: ["identifier"],
+    },
+  },
+];
+
+// ── API Helpers ──
+
+async function callAxiomid(path: string, body: unknown, token?: string): Promise<unknown> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${AXIOMID_API}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }
 
-// ── PAI-MCP Gateway: Unified MCP for the PAI Universe ──
+async function verifyPiToken(accessToken: string): Promise<unknown> {
+  const res = await fetch("https://api.minepi.com/v2/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Pi auth failed: ${res.status}`);
+  return res.json();
+}
 
-export class PAIMCP extends McpAgent<Env> {
-  declare env: Env;
-  server = new McpServer({ name: "PAI-MCP-Gateway", version: "1.0.0" });
+// ── OpenIdentity Helpers ──
 
-  async init() {
-    const e = this.env;
-    
-    // ════════════════════════════════════
-    // ☁️ Cloudflare — pai_cf_*
-    // ════════════════════════════════════
+/** Cache the compiled schema across calls within the same server process. */
+let _schemaCache: Record<string, unknown> | null = null;
 
-    this.server.tool("pai_cf_deployWorker", "Deploy a CF Worker from source", {
-      name: z.string().describe("Worker name"),
-      code: z.string().describe("Worker source code"),
-    }, async ({ name, code }) => {
-      const { CF_ACCOUNT_ID, CF_API_TOKEN } = e;
-      if (!CF_ACCOUNT_ID || !CF_API_TOKEN)
-        return { content: [{ type: "text", text: "Error: CF_ACCOUNT_ID or CF_API_TOKEN not set" }] };
+async function getOpenIdentitySchema(): Promise<Record<string, unknown>> {
+  if (_schemaCache) return _schemaCache;
+  const res = await fetch(OPENIDENTITY_SCHEMA_URL);
+  if (!res.ok) throw new Error(`Failed to fetch schema: ${res.status}`);
+  const schema = await res.json();
+  _schemaCache = schema;
+  return schema;
+}
 
-      const boundary = `----PAI${Date.now()}`;
-      const body = [
-        `--${boundary}`,
-        'Content-Disposition: form-data; name="metadata"',
-        "Content-Type: application/json",
-        "",
-        JSON.stringify({ body_part: "script", main_module: "index.ts" }),
-        `--${boundary}`,
-        'Content-Disposition: form-data; name="script"',
-        "Content-Type: application/javascript",
-        "",
-        code,
-        `--${boundary}--`,
-      ].join("\r\n");
-
-      const resp = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${name}`,
-        { method: "PUT", headers: { Authorization: `Bearer ${CF_API_TOKEN}`, "Content-Type": `multipart/form-data; boundary=${boundary}` }, body }
-      );
-      const result = await resp.json() as any;
-      return { content: [{ type: "text", text: result.success ? `✅ Worker '${name}' deployed` : `❌ Failed: ${JSON.stringify(result.errors)}` }] };
-    });
-
-    this.server.tool("pai_cf_runAI", "Run Workers AI inference", {
-      model: z.string().describe("Model ID (e.g. @cf/meta/llama-3.2-3b-instruct)"),
-      prompt: z.string().describe("Input prompt"),
-    }, async ({ model, prompt }) => {
-      const result = await this.env.AI.run(model as any, { messages: [{ role: "user", content: prompt }] });
-      return { content: [{ type: "text", text: (result as any).response || JSON.stringify(result) }] };
-    });
-
-    this.server.tool("pai_cf_queryDB", "Query a D1 database", {
-      binding: z.enum(["DB_INDUCT", "DB_SKILLS", "DB_GHOST"]).describe("D1 binding"),
-      sql: z.string().describe("SQL query"),
-    }, async ({ binding, sql }) => {
-      const db = (this.env as any)[binding];
-      if (!db) return { content: [{ type: "text", text: `Error: binding '${binding}' not found` }] };
-      const result = await db.prepare(sql).all();
-      return { content: [{ type: "text", text: JSON.stringify(result.results, null, 2) }] };
-    });
-
-    this.server.tool("pai_cf_listWorkers", "List all account Workers", {}, async () => {
-      const { CF_ACCOUNT_ID, CF_API_TOKEN } = this.env as any;
-      if (!CF_ACCOUNT_ID || !CF_API_TOKEN) return { content: [{ type: "text", text: "Error: credentials not set" }] };
-      const resp = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts`,
-        { headers: { Authorization: `Bearer ${CF_API_TOKEN}` } });
-      const data = await resp.json() as any;
-      const names = (data.result || []).map((w: any) => w.id).join(", ");
-      return { content: [{ type: "text", text: `Workers: ${names || "none"}` }] };
-    });
-
-    // ════════════════════════════════════
-    // ▲ Vercel — pai_vc_*
-    // ════════════════════════════════════
-
-    this.server.tool("pai_vc_listDeployments", "List Vercel project deployments", {
-      projectId: z.string().describe("Vercel project ID"),
-    }, async ({ projectId }) => {
-      const token = (this.env as any).VERCEL_API_TOKEN;
-      if (!token) return { content: [{ type: "text", text: "Error: VERCEL_API_TOKEN not set" }] };
-      const resp = await fetch(`https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=10`,
-        { headers: { Authorization: `Bearer ${token}` } });
-      const data = await resp.json() as any;
-      const deps = (data.deployments || []).map((d: any) => `${d.uid}: ${d.state}`).join("\n");
-      return { content: [{ type: "text", text: deps || "No deployments" }] };
-    });
-
-    this.server.tool("pai_vc_setEnv", "Set Vercel env var", {
-      projectId: z.string(), key: z.string(), value: z.string(),
-      target: z.enum(["production", "preview", "development"]).default("production"),
-    }, async ({ projectId, key, value, target }) => {
-      const token = (this.env as any).VERCEL_API_TOKEN;
-      if (!token) return { content: [{ type: "text", text: "Error: VERCEL_API_TOKEN not set" }] };
-      const resp = await fetch(`https://api.vercel.com/v9/projects/${projectId}/env`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ key, value, target: [target], type: "encrypted" }),
-      });
-      const data = await resp.json() as any;
-      return { content: [{ type: "text", text: data.id ? `✅ '${key}' set for ${target}` : `❌ ${JSON.stringify(data)}` }] };
-    });
-
-    // ════════════════════════════════════
-    // 💎 Ghost.Build — pai_gb_* (Layer 7)
-    // ════════════════════════════════════
-
-    this.server.tool("pai_gb_createPool", "Create a Ghost.Build DB pool", {
-      name: z.string().describe("Pool name"),
-      template: z.string().describe("Template (pai-induct/pai-try/pai-skills)"),
-      size: z.number().default(3).describe("Instance count"),
-    }, async ({ name, template, size }) => {
-      const apiKey = (this.env as any).GHOST_BUILD_API_KEY;
-      const apiUrl = (this.env as any).GHOST_BUILD_API_URL || "https://api.ghost.build";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: GHOST_BUILD_API_KEY not set" }] };
-      const resp = await fetch(`${apiUrl}/v1/pools`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ name, template, size }),
-      });
-      const data = await resp.json() as any;
-      return { content: [{ type: "text", text: data.id ? `✅ Pool '${name}' created (${size}x ${template})` : `❌ ${JSON.stringify(data)}` }] };
-    });
-
-    this.server.tool("pai_gb_listPools", "List Ghost.Build DB pools", {}, async () => {
-      const apiKey = (this.env as any).GHOST_BUILD_API_KEY;
-      const apiUrl = (this.env as any).GHOST_BUILD_API_URL || "https://api.ghost.build";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: GHOST_BUILD_API_KEY not set" }] };
-      const resp = await fetch(`${apiUrl}/v1/pools`, { headers: { Authorization: `Bearer ${apiKey}` } });
-      const data = await resp.json() as any;
-      const pools = (data.pools || []).map((p: any) => `${p.name}: ${p.size} (${p.template})`).join("\n");
-      return { content: [{ type: "text", text: pools || "No pools" }] };
-    });
-
-    this.server.tool("pai_gb_sql", "Run SQL on a Ghost.Build database", {
-      poolName: z.string().describe("Pool name"),
-      sql: z.string().describe("SQL query"),
-    }, async ({ poolName, sql }) => {
-      const apiKey = (this.env as any).GHOST_BUILD_API_KEY;
-      const apiUrl = (this.env as any).GHOST_BUILD_API_URL || "https://api.ghost.build";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: GHOST_BUILD_API_KEY not set" }] };
-      const resp = await fetch(`${apiUrl}/v1/pools/${poolName}/query`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ sql }),
-      });
-      const data = await resp.json() as any;
-      return { content: [{ type: "text", text: JSON.stringify(data.results || data, null, 2) }] };
-    });
-
-    // ════════════════════════════════════
-    // 📊 TigerData — pai_td_* (Layer 8)
-    // ════════════════════════════════════
-
-    
-    
-    
-    this.server.tool("pai_almizan_route", "Route prompts across US, China, and Middle East model layers (PAI-AL-MIZAN)", {
-      prompt: z.string().describe("Prompt text to analyze and route"),
-      targetLocale: z.enum(["us", "cn", "mena", "auto"]).default("auto").describe("Target regional preference"),
-      costPreference: z.enum(["cheapest", "fastest", "balanced"]).default("cheapest").describe("Cost vs latency tradeoff"),
-    }, async ({ prompt, targetLocale, costPreference }) => {
-      const isArabic = /[\u0600-\u06FF]/.test(prompt);
-      const isChinese = /[\u4E00-\u9FFF]/.test(prompt);
-      
-      let region = "us";
-      let model = "@cf/meta/llama-3.1-8b-instruct";
-      let provider = "Cloudflare Workers AI (Zero-Cost Free Tier)";
-      
-      if (isArabic || targetLocale === "mena") {
-        region = "mena";
-        model = "jais-30b-chat";
-        provider = "PAI MENA Sovereign Layer (IQRA Substrate)";
-      } else if (isChinese || targetLocale === "cn") {
-        region = "cn";
-        model = "qwen2.5-72b-instruct";
-        provider = "TigerData OpenLLM $1k Credit Pool (DeepSeek/Qwen)";
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            status: "SUCCESS",
-            router: "PAI-AL-MIZAN v1.2",
-            promptSnippet: prompt.slice(0, 40) + "...",
-            routingDecision: {
-              region,
-              provider,
-              model,
-              zeroCostVerified: true,
-              arabicAccuracyEstimate: isArabic ? "99.2%" : "N/A"
-            }
-          }, null, 2)
-        }]
-      };
-    });
-
-    this.server.tool("pai_tembo_vector_search", "Query Tembo Postgres Vector Memory & Supermemory Vault", {
-      query: z.string().describe("Search query string or context vector"),
-      containerTag: z.string().optional().describe("User or container scope tag (e.g. user_did)"),
-      limit: z.number().default(5).describe("Max memory results to return"),
-    }, async ({ query, containerTag, limit }) => {
-      const temboToken = (this.env as any).TEMBO_TOKEN || "8fc996ba0f1fd563c3f74ce33d1c7fde51ef0016e09d8762b53b615c003328d";
-      const temboUrl = (this.env as any).TEMBO_API_URL || "https://api.tembo.io/v1/vector/search";
-      
-      try {
-        const resp = await fetch(temboUrl, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${temboToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ query, containerTag, limit }),
-        });
-        if (!resp.ok) {
-          return { content: [{ type: "text", text: `Tembo Vector Cache Hit: Simulated vector memory result for query '${query}' under tag '${containerTag || "global"}'` }] };
-        }
-        const data = await resp.json() as any;
-        return { content: [{ type: "text", text: JSON.stringify(data) }] };
-      } catch (e: any) {
-        return { content: [{ type: "text", text: `Tembo Fallback Storage: Encrypted memory query logged under tag '${containerTag || "global"}'` }] };
-      }
-    });
-
-    this.server.tool("pai_td_openllm_infer", "Run heavy OpenLLM reasoning via TigerData ($1k Credit Pool)", {
-      prompt: z.string().describe("User prompt or code task"),
-      model: z.string().default("qwen2.5-72b-instruct").describe("Model name (qwen2.5-72b-instruct / llama-3.1-70b-instruct)"),
-      system: z.string().optional().describe("Optional system prompt"),
-    }, async ({ prompt, model, system }) => {
-      const apiKey = (this.env as any).TIGERDATA_API_KEY;
-      const apiUrl = (this.env as any).TIGERDATA_API_URL || "https://console.cloud.tigerdata.com/projects/fxt4i3w3h2/cli-mcp/mcp";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: TIGERDATA_API_KEY not set" }] };
-      const resp = await fetch(apiUrl, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages: [
-            ...(system ? [{ role: "system", content: system }] : []),
-            { role: "user", content: prompt }
-          ]
-        }),
-      });
-      const data = await resp.json() as any;
-      const responseText = data.choices?.[0]?.message?.content || JSON.stringify(data);
-      return { content: [{ type: "text", text: responseText }] };
-    });
-
-    this.server.tool("pai_td_query", "Query TigerData time-series analytics", {
-      sql: z.string().describe("TimescaleDB SQL query"),
-    }, async ({ sql }) => {
-      const apiKey = (this.env as any).TIGERDATA_API_KEY;
-      const apiUrl = (this.env as any).TIGERDATA_API_URL || "https://api.tigerdata.com";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: TIGERDATA_API_KEY not set" }] };
-      const resp = await fetch(`${apiUrl}/v1/query`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ query: sql }),
-      });
-      const data = await resp.json() as any;
-      return { content: [{ type: "text", text: JSON.stringify(data.rows || data, null, 2) }] };
-    });
-
-    this.server.tool("pai_td_ingest", "Ingest a metric into TigerData", {
-      metric: z.string().describe("Metric name"),
-      value: z.number().describe("Metric value"),
-      tags: z.record(z.string(), z.string()).default(() => ({})).describe("Tags"),
-    }, async ({ metric, value, tags }) => {
-      const apiKey = (this.env as any).TIGERDATA_API_KEY;
-      const apiUrl = (this.env as any).TIGERDATA_API_URL || "https://api.tigerdata.com";
-      if (!apiKey) return { content: [{ type: "text", text: "Error: TIGERDATA_API_KEY not set" }] };
-      const resp = await fetch(`${apiUrl}/v1/ingest`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ metric, value, tags, ts: new Date().toISOString() }),
-      });
-      const data = await resp.json() as any;
-      return { content: [{ type: "text", text: data.success ? `✅ ${metric}=${value} ingested` : `❌ ${JSON.stringify(data)}` }] };
-    });
-
-    // ════════════════════════════════════
-    // π Pi Network — pai_pi_*
-    // ════════════════════════════════════
-
-    this.server.tool("pai_pi_status", "Check Pi Network SDK status", {}, async () => {
-      const sandbox = (this.env as any).PI_SANDBOX === "true";
-      return { content: [{ type: "text", text: `Pi SDK: ${sandbox ? "🏖️ Sandbox" : "🌐 Production"}\nWallet: ${(this.env as any).PI_WALLET_ADDRESS || "not set"}` }] };
-    });
-
-    // ════════════════════════════════════
-    // 🧪 Kernel — pai_kr_* (ACTIVE now)
-    // ════════════════════════════════════
-
-    this.server.tool("pai_kr_smoke", "Run a browser smoke test via Kernel.sh", {
-      url: z.string().describe("URL to test"),
-      flow: z.string().default("smoke").describe("Test flow (smoke/full/auth)"),
-    }, async ({ url, flow }) => {
-      // Active implementation: queue to KV for Kernel CLI to pick up + return instructions
-      const testId = crypto.randomUUID();
-      await (this.env as any).CONFIG.put(
-        `smoke:${testId}`,
-        JSON.stringify({ url, flow, status: "queued", created_at: Date.now() }),
-        { expirationTtl: 86400 }
-      );
-      return {
-        content: [{
-          type: "text",
-          text: `🧪 Smoke test queued for ${url}
-
-ID: ${testId}
-Flow: ${flow}
-Run: kernel browser create --start-url "${url}"
-View: kernel browser view <session-id>
-
-To execute manually:
-  brew install kernel/tap/kernel
-  kernel auth
-  kernel browser create --start-url "${url}"
-  LIVE_URL=$(kernel browser view <session-id>)
-  open "$LIVE_URL"`,
-        }],
-      };
-    });
+async function validateAgainstSchema(manifest: unknown): Promise<{
+  valid: boolean;
+  errors: string[];
+}> {
+  try {
+    const schema = await getOpenIdentitySchema();
+    const ajv = new Ajv2020();
+    const validate = ajv.compile(schema);
+    const valid = validate(manifest) as boolean;
+    return {
+      valid,
+      errors: valid ? [] : (validate.errors ?? []).map((e: { message?: string }) => e.message ?? "Unknown error"),
+    };
+  } catch (err) {
+    return {
+      valid: false,
+      errors: [err instanceof Error ? err.message : String(err)],
+    };
   }
 }
 
-// Export the Worker handler — serves MCP at /mcp with StreamableHTTP
-export default PAIMCP.serve("/mcp");
+async function fetchOpenIdentityManifest(identifier: string): Promise<{
+  source: string;
+  manifest: unknown;
+}> {
+  // If the identifier looks like a full URL (contains scheme), fetch it directly
+  if (identifier.startsWith("http://") || identifier.startsWith("https://")) {
+    const res = await fetch(identifier, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(`Fetch from URL failed: ${res.status} ${res.statusText}`);
+    const manifest = await res.json();
+    return { source: identifier, manifest };
+  }
+
+  // If it looks like a domain (e.g. "agent.example.com"), try .well-known/openidentity
+  if (
+    !identifier.includes(":") && // not a DID
+    (identifier.includes(".") || identifier.includes("localhost"))
+  ) {
+    const url = `https://${identifier}/.well-known/openidentity`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+    });
+    if (res.ok) {
+      const manifest = await res.json();
+      return { source: url, manifest };
+    }
+    // Fall through to AxiomID lookup
+  }
+
+  // Default: query AxiomID's agent manifest endpoint
+  const url = `${AXIOMID_API}/api/agent/manifest?identifier=${encodeURIComponent(identifier)}`;
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    // If the AxiomID endpoint returns an error, try .well-known as a last resort
+    // for DID-based identifiers
+    if (identifier.startsWith("did:")) {
+      // For DIDs, extract the domain and try .well-known
+      const parts = identifier.split(":");
+      if (parts.length >= 3 && parts[2].includes(".")) {
+        const wkUrl = `https://${parts[2]}/.well-known/openidentity`;
+        const wkRes = await fetch(wkUrl, {
+          headers: { Accept: "application/json" },
+        });
+        if (wkRes.ok) {
+          const manifest = await wkRes.json();
+          return { source: wkUrl, manifest };
+        }
+      }
+    }
+    throw new Error(`AxiomID lookup failed: ${res.status} ${res.statusText}`);
+  }
+  const manifest = await res.json();
+  return { source: url, manifest };
+}
+
+// ── MCP Server ──
+
+const server = new Server(
+  { name: "@pai/mcp", version: "0.1.0" },
+  { capabilities: { tools: {} } },
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    switch (name) {
+      // ── Memory Tools (via AxiomID /api/memory) ──
+
+      case "memory_store": {
+        const { content, userId, sessionId } = args as {
+          content: string;
+          userId: string;
+          sessionId?: string;
+        };
+        // Use sandbox dev token for MCP (configurable via env)
+        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
+        const result = await callAxiomid(
+          "/api/memory",
+          { action: "store", content, sessionId },
+          token,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      case "memory_recall": {
+        const { query, userId, limit, taskType } = args as {
+          query: string;
+          userId: string;
+          limit?: number;
+          taskType?: string;
+        };
+        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
+        const result = await callAxiomid(
+          "/api/memory",
+          { action: "recall", query, limit, taskType },
+          token,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      case "memory_delete": {
+        const { id } = args as { id: string };
+        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
+        const result = await callAxiomid("/api/memory", { action: "delete", id }, token);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      // ── Identity Tools ──
+
+      case "identity_verify": {
+        const { accessToken } = args as { accessToken: string };
+        const piUser = await verifyPiToken(accessToken);
+        return { content: [{ type: "text", text: JSON.stringify(piUser) }] };
+      }
+
+      case "credential_issue": {
+        const { did, credentialType } = args as {
+          did: string;
+          credentialType: string;
+        };
+        const result = await callAxiomid("/api/agent/identity/claim", {
+          did,
+          credentialType,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      case "credential_verify": {
+        const { credential } = args as { credential: unknown };
+        const result = await callAxiomid("/verify", { credential });
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+
+      // ── OpenIdentity Tool ──
+
+      case "openidentity_discover": {
+        const { identifier } = args as { identifier: string };
+
+        // Step 1: Fetch the manifest
+        const { source, manifest } = await fetchOpenIdentityManifest(identifier);
+
+        // Step 2: Validate against the JSON Schema
+        const validation = await validateAgainstSchema(manifest);
+
+        // Step 3: Return combined result
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  identifier,
+                  source,
+                  manifest,
+                  validation: {
+                    valid: validation.valid,
+                    errors: validation.errors,
+                    schema_url: OPENIDENTITY_SCHEMA_URL,
+                  },
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
+      isError: true,
+    };
+  }
+});
+
+// ── Start ──
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("[pai-mcp] Server started on stdio — ready for MCP requests");
+}
+
+main().catch((err) => {
+  console.error("[pai-mcp] Fatal:", err);
+  process.exit(1);
+});

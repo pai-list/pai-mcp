@@ -1,93 +1,70 @@
-<!-- ═══════════ PAI-MCP · Model Context Protocol Gateway ═══════════ -->
-<!-- Stack: TypeScript, Cloudflare Workers, MCP Standard    -->
-<!-- Tools: 11 across 5 providers (CF/Vercel/GB/Pi/Kernel)  -->
-<!-- Updated: 23 July 2026                                  -->
-<!-- ═══════════════════════════════════════════════════════ -->
+# PAI MCP
 
-<div align="center">
-  <img src="https://img.shields.io/badge/status-live-00FF41?style=flat-square&labelColor=0D1117" />
-  <img src="https://img.shields.io/github/license/pai-list/pai-mcp?style=flat-square&color=00A36C&labelColor=0D1117" />
-  <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&labelColor=0D1117" />
-  <img src="https://img.shields.io/badge/tools-11-FF6B6B?style=flat-square&labelColor=0D1117" />
-  <img src="https://img.shields.io/badge/providers-5-7C3AED?style=flat-square&labelColor=0D1117" />
-</div>
+> **PAI** — *Pi + AI.* The Model Context Protocol server for Pi Network.
 
-# ۞ PAI-MCP Gateway
+Give any AI agent — Claude, GPT, Hermes — direct access to Pi Network protocols through the Model Context Protocol (MCP).
 
-**Unified Model Context Protocol (MCP) server on Cloudflare Workers — connecting AI agents to 11 tools across 5 providers.**
+## What Is This?
 
-PAI-MCP is the standard protocol layer that lets AI agents discover and invoke tools across Cloudflare, Vercel, Ghost.Build, Pi Network, and Kernel. It implements the [Model Context Protocol](https://modelcontextprotocol.io/) specification.
+MCP (Model Context Protocol) is an open standard that lets AI models interact with external tools. PAI MCP is an MCP server that exposes Pi Network capabilities as tools that any LLM can call.
 
----
-
-## ❯ MCP Tools
-
-| Tool | Provider | Description |
-|:-----|:---------|:------------|
-| `kv_get` / `kv_set` | ☁️ Cloudflare | KV store read/write |
-| `vectorize_query` | ☁️ Cloudflare | Semantic vector search |
-| `do_al_mizan` | ☁️ Cloudflare | Al-Mizan model routing |
-| `vercel_deploy` | ▲ Vercel | One-click Vercel deployment |
-| `ghost_query` | 👻 Ghost.Build | PostgreSQL query |
-| `ghost_schema` | 👻 Ghost.Build | Database schema inspection |
-| `pi_verify` | 🥧 Pi Network | KYC → KYA credential bridge |
-| `pi_wallet` | 🥧 Pi Network | Wallet balance check |
-| `kernel_exec` | ⚙️ Kernel | Shell command execution |
-| `mcp_discover` | 🔍 Discovery | Tool registry lookup |
-| `passport_verify` | 🛡️ Identity | W3C DID credential verification |
-
----
-
-## ❯ Quick Start
-
-```bash
-npm install
-npx wrangler deploy
+```
+Claude / GPT / Hermes
+        │
+   MCP Protocol
+        │
+   PAI MCP Server
+        │
+   ┌────┴────┬────┬────┬────┐
+   │         │    │    │    │
+ Verify    DID  Trust Pay Wallet
+   │         │    │    │    │
+   └─────────┴────┴────┴────┘
+          Pi Network
 ```
 
-The MCP server auto-discovers tools on startup. Agents connect via:
+## Tools
+
+| Tool | What It Does |
+|---|---|
+| `verify_human` | Verify a wallet belongs to a KYC'd human via PiVerify |
+| `create_did` | Generate a `did:pai:` identity |
+| `resolve_did` | Resolve any PAI DID document |
+| `trust_score` | Get trust score for an identity |
+| `check_proof` | Verify a PiVerify proof hash |
+| `send_payment` | Send Pi or USDC |
+| `get_balance` | Check Pi wallet balance |
+
+## Quickstart
+
+```bash
+npm install -g @pai/mcp
+pai-mcp start
+```
+
+Then configure your AI agent to connect:
 
 ```json
 {
-  "serverUrl": "https://pai-mcp.axiomid.app/mcp",
-  "protocol": "model-context-protocol"
+  "mcpServers": {
+    "pai": {
+      "command": "pai-mcp",
+      "args": ["start"]
+    }
+  }
 }
 ```
 
----
+## Why MCP?
 
-## ❯ Architecture
+MCP is becoming the universal protocol for AI tool access. By shipping PAI MCP, every AI agent built on Claude, GPT, Hermes, or any MCP-compatible model can natively interact with Pi Network — without writing a single line of Pi-specific code.
 
-```
-AI Agent (Claude, Hermes, GPT, etc.)
-    │
-    ▼  MCP protocol (JSON-RPC over HTTP)
-pai-mcp gateway (Cloudflare Worker)
-    │
-    ├── index.ts → tool router + MCP handler
-    └── al-mizan-worker.ts → multi-model inference router
-    │
-    ├──☁️ Cloudflare (KV, Vectorize, DO)
-    ├──▲ Vercel (deploy, preview)
-    ├──👻 Ghost.Build (PostgreSQL)
-    ├──🥧 Pi Network (KYC, wallet)
-    └──⚙️ Kernel (exec, filesystem)
-```
+This is our distribution play: **every AI model user becomes a Pi Network user.**
+
+## License
+
+PiOS — Pi Open Source License
 
 ---
 
-## ❯ Related
-
-- [`pai-list/pai-agent-kit`](https://github.com/pai-list/pai-agent-kit) — Agent runtime that consumes these tools
-- [`pai-list/pai-cli`](https://github.com/pai-list/pai-cli) — CLI to manage MCP endpoints
-- [`pai-list/AxiomID`](https://github.com/pai-list/AxiomID) — Identity layer for MCP auth
-
----
-
-## ❯ License
-
-MIT © [PAI Ecosystem](https://github.com/pai-list)
-
----
-
-*One protocol. Eleven tools. Infinite agents.*
+**PAI MCP.** Give any AI agent Pi Network superpowers.
