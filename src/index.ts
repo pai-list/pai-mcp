@@ -7,9 +7,6 @@
  * tools via the Model Context Protocol (MCP).
  *
  * Tools provided:
- *   - memory_store     Store a memory (backed by mem7)
- *   - memory_recall    Recall relevant memories (with decay + context scoring)
- *   - memory_delete    Delete a memory
  *   - identity_verify  Verify a Pi access token + DID
  *   - credential_issue Issue a pai:// Verifiable Credential
  *   - credential_verify Verify a pai:// credential
@@ -39,44 +36,6 @@ const OPENIDENTITY_SCHEMA_URL =
 // ── Tool Definitions ──
 
 const TOOLS: Tool[] = [
-  {
-    name: "memory_store",
-    description: "Store a conversation memory for an agent. Backed by mem7 (Rust memory engine with Ebbinghaus decay, dedup, and graph extraction).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        content: { type: "string", description: "The memory content to store" },
-        userId: { type: "string", description: "User/agent identifier" },
-        sessionId: { type: "string", description: "Optional session ID" },
-      },
-      required: ["content", "userId"],
-    },
-  },
-  {
-    name: "memory_recall",
-    description: "Recall relevant memories for a query. Results are scored by mem7's Ebbinghaus decay curve and context-scoring matrix.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query" },
-        userId: { type: "string", description: "User/agent identifier" },
-        limit: { type: "number", description: "Max results (default 10)" },
-        taskType: { type: "string", description: "Task type for context scoring: troubleshooting, design, factual, planning, general" },
-      },
-      required: ["query", "userId"],
-    },
-  },
-  {
-    name: "memory_delete",
-    description: "Delete a specific memory by ID.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "Memory ID to delete" },
-      },
-      required: ["id"],
-    },
-  },
   {
     name: "identity_verify",
     description: "Verify a Pi access token and return the authenticated user's DID.",
@@ -265,47 +224,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      // ── Memory Tools (via AxiomID /api/memory) ──
-
-      case "memory_store": {
-        const { content, userId, sessionId } = args as {
-          content: string;
-          userId: string;
-          sessionId?: string;
-        };
-        // Use sandbox dev token for MCP (configurable via env)
-        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
-        const result = await callAxiomid(
-          "/api/memory",
-          { action: "store", content, sessionId },
-          token,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
-      case "memory_recall": {
-        const { query, userId, limit, taskType } = args as {
-          query: string;
-          userId: string;
-          limit?: number;
-          taskType?: string;
-        };
-        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
-        const result = await callAxiomid(
-          "/api/memory",
-          { action: "recall", query, limit, taskType },
-          token,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
-      case "memory_delete": {
-        const { id } = args as { id: string };
-        const token = process.env.SANDBOX_DEV_TOKEN || process.env._MCP_TOKEN;
-        const result = await callAxiomid("/api/memory", { action: "delete", id }, token);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
       // ── Identity Tools ──
 
       case "identity_verify": {
