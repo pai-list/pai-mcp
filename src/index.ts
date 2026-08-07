@@ -31,14 +31,14 @@ import Ajv from "ajv";
 
 // ── Configuration ──
 
-const AXIOMID_API = process.env.AXIOMID_API_URL ?? "https://axiomid.app";
-const PI_API_KEY = process.env.PI_API_KEY ?? "";
-const OPENIDENTITY_SCHEMA_URL =
+export const AXIOMID_API = process.env.AXIOMID_API_URL ?? "https://axiomid.app";
+export const PI_API_KEY = process.env.PI_API_KEY ?? "";
+export const OPENIDENTITY_SCHEMA_URL =
   "https://raw.githubusercontent.com/pai-list/openidentity.md/main/schema/openidentity.schema.json";
 
 // ── Tool Definitions ──
 
-const TOOLS: Tool[] = [
+export const TOOLS: Tool[] = [
   {
     name: "memory_store",
     description: "Store a conversation memory for an agent. Backed by mem7 (Rust memory engine with Ebbinghaus decay, dedup, and graph extraction).",
@@ -138,7 +138,7 @@ const TOOLS: Tool[] = [
 
 // ── API Helpers ──
 
-async function callAxiomid(path: string, body: unknown, token?: string): Promise<unknown> {
+export async function callAxiomid(path: string, body: unknown, token?: string): Promise<unknown> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
@@ -150,7 +150,7 @@ async function callAxiomid(path: string, body: unknown, token?: string): Promise
   return res.json();
 }
 
-async function verifyPiToken(accessToken: string): Promise<unknown> {
+export async function verifyPiToken(accessToken: string): Promise<unknown> {
   const res = await fetch("https://api.minepi.com/v2/me", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -163,7 +163,7 @@ async function verifyPiToken(accessToken: string): Promise<unknown> {
 /** Cache the compiled schema across calls within the same server process. */
 let _schemaCache: Record<string, unknown> | null = null;
 
-async function getOpenIdentitySchema(): Promise<Record<string, unknown>> {
+export async function getOpenIdentitySchema(): Promise<Record<string, unknown>> {
   if (_schemaCache) return _schemaCache;
   const res = await fetch(OPENIDENTITY_SCHEMA_URL);
   if (!res.ok) throw new Error(`Failed to fetch schema: ${res.status}`);
@@ -172,13 +172,13 @@ async function getOpenIdentitySchema(): Promise<Record<string, unknown>> {
   return schema;
 }
 
-async function validateAgainstSchema(manifest: unknown): Promise<{
+export async function validateAgainstSchema(manifest: unknown): Promise<{
   valid: boolean;
   errors: string[];
 }> {
   try {
     const schema = await getOpenIdentitySchema();
-    const ajv = new Ajv2020();
+    const ajv = new Ajv();
     const validate = ajv.compile(schema);
     const valid = validate(manifest) as boolean;
     return {
@@ -193,7 +193,7 @@ async function validateAgainstSchema(manifest: unknown): Promise<{
   }
 }
 
-async function fetchOpenIdentityManifest(identifier: string): Promise<{
+export async function fetchOpenIdentityManifest(identifier: string): Promise<{
   source: string;
   manifest: unknown;
 }> {
@@ -253,7 +253,7 @@ async function fetchOpenIdentityManifest(identifier: string): Promise<{
 
 // ── MCP Server ──
 
-const server = new Server(
+export const server = new Server(
   { name: "@pai/mcp", version: "0.1.0" },
   { capabilities: { tools: {} } },
 );
@@ -381,13 +381,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // ── Start ──
 
-async function main() {
+export async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[pai-mcp] Server started on stdio — ready for MCP requests");
 }
 
-main().catch((err) => {
-  console.error("[pai-mcp] Fatal:", err);
-  process.exit(1);
-});
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  main().catch((err) => {
+    console.error("[pai-mcp] Fatal:", err);
+    process.exit(1);
+  });
+}
