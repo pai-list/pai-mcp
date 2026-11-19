@@ -4,6 +4,7 @@ import {
   verifyPiToken,
   validateAgainstSchema,
   fetchOpenIdentityManifest,
+  resetSchemaCache,
   AXIOMID_API,
   OPENIDENTITY_SCHEMA_URL,
 } from "../index.js";
@@ -11,7 +12,12 @@ import {
 describe("MCP API Helpers & Protocol Handling", () => {
   const originalFetch = global.fetch;
 
+  beforeEach(() => {
+    resetSchemaCache();
+  });
+
   afterEach(() => {
+    resetSchemaCache();
     global.fetch = originalFetch;
     vi.restoreAllMocks();
   });

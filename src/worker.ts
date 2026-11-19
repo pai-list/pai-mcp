@@ -593,6 +593,21 @@ selectTool(0);
 </body>
 </html>`;
 
+export class PAIMCP {
+  constructor(_state?: unknown, _env?: unknown) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    return json({
+      name: NAME,
+      version: VERSION,
+      durableObject: "PAIMCP",
+      path: url.pathname,
+      status: "active",
+    });
+  }
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);

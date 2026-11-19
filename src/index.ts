@@ -16,7 +16,7 @@
  *
  * Usage:
  *   npx @pai/mcp
- *   # or add to Claude Code / Hermes MCP config:
+ *   # or add to Claude Code / PAI MCP config:
  *   pai-mcp as command
  */
 
@@ -27,7 +27,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import Ajv from "ajv";
+import Ajv2020Module from "ajv/dist/2020.js";
 
 // ── Configuration ──
 
@@ -163,6 +163,10 @@ export async function verifyPiToken(accessToken: string): Promise<unknown> {
 /** Cache the compiled schema across calls within the same server process. */
 let _schemaCache: Record<string, unknown> | null = null;
 
+export function resetSchemaCache(): void {
+  _schemaCache = null;
+}
+
 export async function getOpenIdentitySchema(): Promise<Record<string, unknown>> {
   if (_schemaCache) return _schemaCache;
   const res = await fetch(OPENIDENTITY_SCHEMA_URL);
@@ -178,7 +182,10 @@ export async function validateAgainstSchema(manifest: unknown): Promise<{
 }> {
   try {
     const schema = await getOpenIdentitySchema();
-    const ajv = new Ajv();
+    const Ajv2020 =
+      Ajv2020Module.default ??
+      (Ajv2020Module as unknown as typeof Ajv2020Module.default);
+    const ajv = new Ajv2020({ strict: false });
     const validate = ajv.compile(schema);
     const valid = validate(manifest) as boolean;
     return {

@@ -1,29 +1,58 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pai-mcp-gateway",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-07-20",
-  "compatibility_flags": ["nodejs_compat"],
-  "durable_objects": {
-    "bindings": [
-      { "name": "PAIMCP", "class_name": "PAIMCP" }
-    ]
-  },
-  "ai": { "binding": "AI" },
-  "d1_databases": [
-    { "binding": "DB_INDUCT", "database_name": "pai-induct" },
-    { "binding": "DB_SKILLS", "database_name": "pai-skills" },
-    { "binding": "DB_GHOST", "database_name": "pai-ghost" }
-  ],
-  "kv_namespaces": [
-    { "binding": "CONFIG" }
-  ],
-  "observability": { "enabled": true },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PAIMCP"] }
-  ],
-  "vars": {
-    "GHOST_BUILD_API_URL": "https://api.ghost.build",
-    "TIGERDATA_API_URL": "https://api.tigerdata.com"
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pai-mcp-gateway",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-07-20",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "PAIMCP",
+				"class_name": "PAIMCP"
+			}
+		]
+	},
+	"ai": {
+		"binding": "AI"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB_INDUCT",
+			"database_name": "pai-induct",
+			"database_id": "6870efc6-1253-410a-8d79-a67694edf177"
+		},
+		{
+			"binding": "DB_SKILLS",
+			"database_name": "pai-skills",
+			"database_id": "d4608dae-ca25-450c-93f8-92e3c7136073"
+		},
+		{
+			"binding": "DB_GHOST",
+			"database_name": "pai-ghost",
+			"database_id": "e1bc2997-a58e-4292-a156-dc40224169f9"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "CONFIG",
+			"id": "afddf91820ef4e2bba4dbe5007994459"
+		}
+	],
+	"observability": {
+		"enabled": true
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"PAIMCP"
+			]
+		}
+	],
+	"vars": {
+		"GHOST_BUILD_API_URL": "https://api.ghost.build",
+		"TIGERDATA_API_URL": "https://api.tigerdata.com"
+	}
 }
